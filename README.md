@@ -21,7 +21,11 @@ python3 -m http.server 8000
 ### GitHub Pages で公開する
 
 `main` にプッシュすると GitHub Actions（`.github/workflows/pages.yml`）が自動で GitHub Pages にデプロイします。
+
 初回だけ、リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にしてください。
+有効化する前に走ったワークフローは「Create Pages site failed」で失敗するので、有効化したあとに
+**Actions → Deploy to GitHub Pages → Re-run all jobs** を押すか、次のプッシュを待ちます。
+
 公開 URL は `https://<ユーザー名>.github.io/madobe/` です。
 
 ## 操作
