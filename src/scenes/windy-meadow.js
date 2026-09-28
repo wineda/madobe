@@ -1,4 +1,4 @@
-/* 風の草原 — 昼下がりの草原。風の強さが 1/f ゆらぎで刻々と変わり、草・広葉の草・葦が揺れる。
+/* 風の草原 — 昼下がりの草原。風の強さが 1/f ゆらぎで刻々と変わり、草地を渡る風の帯と雲の流れに現れる。
  * なだらかな丘が続く草原で、青空には積雲が風で流れる。「ゆらぎ β」でゆらぎの質を変えられる：0 = 白色（せわしない）、1 = 1/f（自然）、2 = ブラウン（ゆったり）。
  * 風速の積分を突風の波の位相にしているので、強い風のときは草原を波が渡っていく。
  */
@@ -137,14 +137,14 @@
         const gx = (x / 256) * gridN, gy = (y / 256) * gridN;
         const x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0;
         const c = (g(x0, y0) * (1 - fx) + g(x0 + 1, y0) * fx) * (1 - fy) + (g(x0, y0 + 1) * (1 - fx) + g(x0 + 1, y0 + 1) * fx) * fy;
-        const v = 150 + (c - 0.5) * 70 + (Math.random() - 0.5) * 40;
+        const v = 150 + (c - 0.5) * 60 + (Math.random() - 0.5) * 70;
         img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = Math.max(0, Math.min(255, v));
         img.data[i * 4 + 3] = 255;
       }
       tctx.putImageData(img, 0, 0);
       const groundTex = new THREE.CanvasTexture(texCanvas);
       groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping;
-      groundTex.repeat.set(60, 60);
+      groundTex.repeat.set(90, 90);
       groundTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
       // ---- 地形：手前は平らで、遠くほどなだらかな丘になる ----
       const hillHeight = (x, z) => {
@@ -162,10 +162,21 @@
         for (let i = 0; i < pos.count; i++) pos.setY(i, hillHeight(pos.getX(i), pos.getZ(i)));
         groundGeo.computeVertexNormals();
       }
-      const ground = new THREE.Mesh(
-        groundGeo,
-        new THREE.MeshStandardMaterial({ color: srgb(0x5d9a2c), map: groundTex, roughness: 0.95, metalness: 0 })
-      );
+      // 風が渡ると草地の色が帯状に明るく変わって見える。突風の波（gustPhase）と同じ位相で地面の色を揺らす
+      const groundUniforms = { uGustPhase: { value: 0 }, uGustAmp: { value: 0 }, uWindSign: { value: 1 } };
+      const groundMat = new THREE.MeshStandardMaterial({ color: srgb(0x5d9a2c), map: groundTex, roughness: 0.95, metalness: 0 });
+      groundMat.onBeforeCompile = (shader) => {
+        Object.assign(shader.uniforms, groundUniforms);
+        shader.vertexShader = 'varying vec3 vWPos;\n' + shader.vertexShader
+          .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+        shader.fragmentShader = 'uniform float uGustPhase;\nuniform float uGustAmp;\nuniform float uWindSign;\nvarying vec3 vWPos;\n' + shader.fragmentShader
+          .replace('#include <map_fragment>', `#include <map_fragment>
+            float gW = pow(max(sin(vWPos.x * 0.22 * uWindSign + vWPos.z * 0.09 - uGustPhase), 0.0), 2.0);
+            float gW2 = pow(max(sin(vWPos.x * 0.09 * uWindSign - vWPos.z * 0.05 - uGustPhase * 0.6 + 1.7), 0.0), 2.0);
+            diffuseColor.rgb *= 1.0 + uGustAmp * (gW * 0.7 + gW2 * 0.5);`);
+      };
+      groundMat.customProgramCacheKey = () => 'madobe-meadow-ground';
+      const ground = new THREE.Mesh(groundGeo, groundMat);
       ground.receiveShadow = true;
       scene.add(ground);
 
@@ -183,49 +194,6 @@
       dirLight.shadow.bias = -0.003;
       dirLight.target.position.set(0, 0, -8);
       scene.add(dirLight, dirLight.target);
-
-      // ---- 草木：3層。密な下草、広葉の草、背の高い葦 ----
-      const field = (r0, r1, z0, z1) => () => {
-        const x = (Math.random() - 0.5) * 2 * lerp(r0, r1, Math.pow(Math.random(), 0.7));
-        const z = z0 + Math.random() * (z1 - z0);
-        return [x, z, hillHeight(x, z)];
-      };
-      const grass = helpers.makeGrass(THREE, scene, {
-        count: 4200,
-        place: field(0, 34, -60, 10),
-        clusters: { count: 120, radius: 2.5, ratio: 0.6 },
-        height: [0.3, 0.75],
-        bladeWidth: 0.07,
-        spread: 0.35,
-        color: srgb(0x6fae32),
-        tint: 0.35,
-        roughness: 0.9,
-      });
-      const broad = helpers.makeGrass(THREE, scene, {
-        count: 420,
-        place: field(0, 26, -36, 3),
-        clusters: { count: 40, radius: 1.8, ratio: 0.8 },
-        height: [0.5, 1.0],
-        blades: 3,
-        bladeWidth: 0.16,
-        spread: 0.55,
-        color: srgb(0x4c9a38),
-        tint: 0.3,
-        roughness: 0.85,
-      });
-      const reeds = helpers.makeGrass(THREE, scene, {
-        count: 200,
-        place: field(2, 24, -34, 1),
-        clusters: { count: 30, radius: 1.6, ratio: 0.85 },
-        height: [1.4, 2.4],
-        blades: 6,
-        bladeWidth: 0.03,
-        spread: 0.22,
-        color: srgb(0xa9b85a),
-        tint: 0.25,
-        roughness: 0.8,
-      });
-      const sway = reduceMotion ? 0.35 : 1;
 
       // ---- 風：1/f ゆらぎ ----
       const gust = helpers.makeFluctuation({ octaves: 8, baseFreq: 1 / 32 });
@@ -268,10 +236,9 @@
           cloudDrift += windNow * dt * 0.012;
           uniforms.uCloudOffset.value.x = cloudDrift;
 
-          const w = { wind: windNow, sway, gustPhase, gustAmp: 0.12 * Math.min(1, windNow / 3) };
-          grass.update(dt, t, w);
-          broad.update(dt, t, w);
-          reeds.update(dt, t, w);
+          groundUniforms.uGustPhase.value = gustPhase;
+          groundUniforms.uGustAmp.value = 0.14 * Math.min(1, windNow / 3);
+          groundUniforms.uWindSign.value = windNow >= 0 ? 1 : -1;
 
           if (!reduceMotion) {
             camera.position.x = camBase.x + Math.sin(t * 0.12) * 0.6;
