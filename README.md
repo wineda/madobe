@@ -60,7 +60,7 @@ python3 -m http.server 8000
 | `windy-meadow` | 風の草原 | 風の強さ / ゆらぎ β / 日の高さ |
 
 雨の2シーンは路肩の草が「風」に合わせて揺れます。焚き火は炎・火の粉・煙が同じ「風」でなびきます。
-風の草原は風の強さが **1/f ゆらぎ** で刻々と変わり、「ゆらぎ β」でその質を変えられます（0 = 白色でせわしない、1 = 1/f で自然、2 = ブラウンでゆったり）。
+風の草原はなだらかな丘が続く草原で、青空の積雲が風で流れます。風の強さが **1/f ゆらぎ** で刻々と変わり、「ゆらぎ β」でその質を変えられます（0 = 白色でせわしない、1 = 1/f で自然、2 = ブラウンでゆったり）。
 
 ## シーンを追加する
 
@@ -107,7 +107,7 @@ madobe.register({
 - `makeRipples(THREE, scene, { count, color, maxOpacity, speed })` → `{ spawn(x, z), update(dt) }`
   `RingGeometry` のプールを再利用して地面の波紋を広げます
 - `makeGrass(THREE, scene, { count, place(i) → [x, z], clusters, height, blades, bladeWidth, spread, color, roughness })` → `{ mesh, update(dt, t, { wind, sway, gustPhase, gustAmp }) }`
-  風に揺れる草むら。3枚の葉を交差させた株を `InstancedMesh` で並べ（1ドローコール）、頂点シェーダーで根元を固定したまま先端を曲げます。`wind` はシーンの風パラメータと同じ単位、`sway` は揺れの強さ（0 で静止）。`gustPhase` と `gustAmp` を渡すと、風下へ進む突風の帯が草原を渡っていきます（位相に風速の積分を入れると風が強いほど速く進む）
+  風に揺れる草むら。3枚の葉を交差させた株を `InstancedMesh` で並べ（1ドローコール）、頂点シェーダーで根元を固定したまま先端を曲げます。`place` が `[x, z, y]` を返せば起伏のある地面にも置けます。`wind` はシーンの風パラメータと同じ単位、`sway` は揺れの強さ（0 で静止）。`gustPhase` と `gustAmp` を渡すと、風下へ進む突風の帯が草原を渡っていきます（位相に風速の積分を入れると風が強いほど速く進む）
 - `makeFluctuation({ octaves, baseFreq })` → `{ sample(t, beta) }`
   1/f ゆらぎ（ピンクノイズ）の時間関数。周波数が 2 倍ずつ違うなめらかな値ノイズを重ね、各オクターブの振幅を 2^(-k(β-1)/2) にしてパワースペクトルを 1/f^β にします。`sample(t, beta)` は概ね -1〜1。風の強さ・炎の明滅・光のちらつきなど「一定でも乱雑でもない」変化に使います
 - `makeFlame(THREE, scene, { layers, width, height, bright, position, camera, embers: { max }, smoke: { max, tint, opacity } })` → `{ group, flicker, update(dt, t, { power, wind, embers, smoke, pixelHeight }) }`

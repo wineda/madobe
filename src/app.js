@@ -289,9 +289,9 @@
     const sv = new THREE.Vector3();
     const c = new THREE.Color();
     for (let i = 0; i < count; i++) {
-      const xz = placer(i);
+      const xz = placer(i); // [x, z] または [x, z, y]（起伏のある地面に置くとき）
       const h = height[0] + Math.random() * (height[1] - height[0]);
-      pv.set(xz[0], 0, xz[1]);
+      pv.set(xz[0], xz.length > 2 ? xz[2] : 0, xz[1]);
       sv.set(h, h, h);
       mesh.setMatrixAt(i, m.compose(pv, q, sv));
       const k = 1 - tint / 2 + Math.random() * tint;

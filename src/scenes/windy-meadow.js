@@ -1,5 +1,5 @@
 /* 風の草原 — 昼下がりの草原。風の強さが 1/f ゆらぎで刻々と変わり、草・広葉の草・葦が揺れる。
- * 「ゆらぎ β」でゆらぎの質を変えられる：0 = 白色（せわしない）、1 = 1/f（自然）、2 = ブラウン（ゆったり）。
+ * なだらかな丘が続く草原で、青空には積雲が風で流れる。「ゆらぎ β」でゆらぎの質を変えられる：0 = 白色（せわしない）、1 = 1/f（自然）、2 = ブラウン（ゆったり）。
  * 風速の積分を突風の波の位相にしているので、強い風のときは草原を波が渡っていく。
  */
 (function () {
@@ -13,7 +13,7 @@
       gl_Position = projectionMatrix * viewMatrix * wp;
     }
   `;
-  // 3色グラデーション＋太陽＋風で流れる雲（平面投影したノイズ）
+  // 3色グラデーション＋太陽＋風で流れる積雲（平面投影した fbm を 2 層。厚いところは底が灰色に）
   const SKY_FRAG = `
     uniform vec3 uHorizon;
     uniform vec3 uMid;
@@ -30,26 +30,43 @@
     }
     float fbm(vec2 p) {
       float v = 0.0; float a = 0.5;
-      for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + 17.0; a *= 0.5; }
+      for (int i = 0; i < 6; i++) { v += a * noise(p); p = p * 2.03 + 17.0; a *= 0.5; }
       return v;
+    }
+    // 1 層分の雲：coverage を超えた分を密度に。ふちは薄く、厚い中心ほど底が暗い
+    vec4 cloudLayer(vec2 cp, float coverage) {
+      float n = fbm(cp);
+      float dens = smoothstep(coverage, coverage + 0.09, n);
+      float detail = fbm(cp * 3.1 + 7.3);
+      dens *= 0.7 + 0.5 * detail;
+      float thick = smoothstep(coverage + 0.06, coverage + 0.24, n);
+      return vec4(dens, thick, n, detail);
     }
     void main() {
       vec3 d = normalize(vWorldPos - cameraPosition);
       float h = d.y;
-      float t1 = smoothstep(-0.02, 0.2, h);
-      float t2 = smoothstep(0.1, 0.8, h);
+      float t1 = smoothstep(-0.02, 0.12, h);
+      float t2 = smoothstep(0.05, 0.6, h);
       vec3 col = mix(uHorizon, uMid, t1);
       col = mix(col, uZenith, t2);
       float sd = max(dot(d, uSunDir), 0.0);
-      col += uSunColor * (pow(sd, 6.0) * 0.18 + pow(sd, 80.0) * 0.5 + pow(sd, 900.0) * 1.5);
-      // 雲：空を平面に投影して fbm。密度は高さで薄くなり、太陽側が明るい
-      float band = smoothstep(0.02, 0.12, h);
-      vec2 cp = d.xz / max(h, 0.02) * 0.12 + uCloudOffset;
-      float n = fbm(cp);
-      float cloud = band * smoothstep(0.5, 0.72, n) * uCloud;
-      float lit = 0.55 + 0.45 * pow(sd, 2.0);
-      vec3 cloudCol = mix(uMid * 0.85 + 0.15, uSunColor, 0.35) * lit;
-      col = mix(col, cloudCol, clamp(cloud, 0.0, 1.0) * 0.9);
+      col += uSunColor * (pow(sd, 6.0) * 0.15 + pow(sd, 90.0) * 0.45 + pow(sd, 1000.0) * 1.5);
+
+      // 雲：空を高さ 1 の平面に投影。地平線近くは密になりすぎるので薄める
+      float band = smoothstep(0.02, 0.1, h);
+      float horizonFade = smoothstep(0.0, 0.14, h);
+      vec2 base = d.xz / max(h, 0.015);
+      vec4 c1 = cloudLayer(base * 0.32 + uCloudOffset, 0.62 - 0.1 * uCloud);
+      vec4 c2 = cloudLayer(base * 0.6 + uCloudOffset * 1.5 + vec2(31.0, 17.0), 0.68 - 0.08 * uCloud);
+      float dens = clamp(c1.x + c2.x * 0.5, 0.0, 1.0) * band;
+      float thick = max(c1.y, c2.y * 0.7);
+      // 色：ふちは白く輝き、厚い部分は灰色の底。太陽側はさらに明るい
+      vec3 white = vec3(1.0, 0.99, 0.97);
+      vec3 shade = mix(vec3(0.58, 0.62, 0.72), vec3(0.76, 0.78, 0.86), pow(sd, 1.5));
+      vec3 cloudCol = mix(white, shade, thick * 0.9);
+      cloudCol += uSunColor * pow(sd, 4.0) * 0.25;
+      cloudCol = mix(uHorizon, cloudCol, horizonFade);
+      col = mix(col, cloudCol, dens * 0.95);
       gl_FragColor = vec4(col, 1.0);
       #include <tonemapping_fragment>
       #include <encodings_fragment>
@@ -84,8 +101,8 @@
 
       // 日の高さ 0 → 1 のキーフレーム（低い午後の光 → 高い昼の光）
       const KEYS = [
-        { el: 8,  horizon: srgb(0xf1c891), mid: srgb(0xa9bdd6), zenith: srgb(0x4b79b8), sun: srgb(0xffd9a6), fog: srgb(0xd9c6a8), dir: 1.0, hemi: 0.55, exposure: 0.95, cloud: 0.75 },
-        { el: 58, horizon: srgb(0xd8e6f2), mid: srgb(0x7fb0e3), zenith: srgb(0x2f6fc6), sun: srgb(0xfff8ea), fog: srgb(0xc9d8e6), dir: 1.35, hemi: 0.7,  exposure: 1.0,  cloud: 0.6 },
+        { el: 8,  horizon: srgb(0xf0cf9e), mid: srgb(0x86b0e0), zenith: srgb(0x2f6fc4), sun: srgb(0xffd9a6), fog: srgb(0xd8c8ae), dir: 1.0, hemi: 0.6,  exposure: 0.95, cloud: 0.7 },
+        { el: 58, horizon: srgb(0xc9e2f8), mid: srgb(0x4a9be8), zenith: srgb(0x1559c2), sun: srgb(0xfff8ea), fog: srgb(0xc4dbf0), dir: 1.4, hemi: 0.75, exposure: 1.0,  cloud: 0.6 },
       ];
 
       // ---- 空 ----
@@ -120,24 +137,39 @@
         const gx = (x / 256) * gridN, gy = (y / 256) * gridN;
         const x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0;
         const c = (g(x0, y0) * (1 - fx) + g(x0 + 1, y0) * fx) * (1 - fy) + (g(x0, y0 + 1) * (1 - fx) + g(x0 + 1, y0 + 1) * fx) * fy;
-        const v = 110 + (c - 0.5) * 80 + (Math.random() - 0.5) * 50;
+        const v = 150 + (c - 0.5) * 70 + (Math.random() - 0.5) * 40;
         img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = Math.max(0, Math.min(255, v));
         img.data[i * 4 + 3] = 255;
       }
       tctx.putImageData(img, 0, 0);
       const groundTex = new THREE.CanvasTexture(texCanvas);
       groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping;
-      groundTex.repeat.set(40, 40);
+      groundTex.repeat.set(60, 60);
       groundTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      // ---- 地形：手前は平らで、遠くほどなだらかな丘になる ----
+      const hillHeight = (x, z) => {
+        const dist = Math.hypot(x, z);
+        const rise = THREE.MathUtils.smoothstep(dist, 18, 110); // 手前 18m までは平ら
+        const h = 9 * Math.sin(x * 0.021 + 1.3) * Math.cos(z * 0.017 - 0.4)
+                + 5 * Math.sin(x * 0.047 - z * 0.031 + 2.1)
+                + 2.5 * Math.sin(x * 0.11 + z * 0.09);
+        return (h + 6) * rise;
+      };
+      const groundGeo = new THREE.PlaneGeometry(600, 600, 220, 220);
+      groundGeo.rotateX(-Math.PI / 2);
+      {
+        const pos = groundGeo.attributes.position;
+        for (let i = 0; i < pos.count; i++) pos.setY(i, hillHeight(pos.getX(i), pos.getZ(i)));
+        groundGeo.computeVertexNormals();
+      }
       const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(600, 600),
-        new THREE.MeshStandardMaterial({ color: srgb(0x6d7a3c), map: groundTex, roughness: 0.95, metalness: 0 })
+        groundGeo,
+        new THREE.MeshStandardMaterial({ color: srgb(0x5d9a2c), map: groundTex, roughness: 0.95, metalness: 0 })
       );
-      ground.rotation.x = -Math.PI / 2;
       ground.receiveShadow = true;
       scene.add(ground);
 
-      scene.fog = new THREE.Fog(0x000000, 30, 260);
+      scene.fog = new THREE.Fog(0x000000, 40, 420);
 
       // ---- 光 ----
       const hemi = new THREE.HemisphereLight(0xffffff, 0x000000, 0.6);
@@ -152,67 +184,44 @@
       dirLight.target.position.set(0, 0, -8);
       scene.add(dirLight, dirLight.target);
 
-      // ---- 遠景：丘の稜線と木立 ----
-      const hillMat = new THREE.MeshStandardMaterial({ color: srgb(0x5f7a3e), roughness: 1 });
-      [[-120, 24, 220], [60, 18, 260], [180, 30, 300], [-40, 14, 190]].forEach(([x, h, z]) => {
-        const hill = new THREE.Mesh(new THREE.SphereGeometry(h * 3.2, 24, 12), hillMat);
-        hill.scale.set(1.8, 1, 1);
-        hill.position.set(x, -h * 3.2 + h, -z);
-        scene.add(hill);
-      });
-      const treeMat = new THREE.MeshStandardMaterial({ color: srgb(0x2f4a26), roughness: 1 });
-      const trunkMat = new THREE.MeshStandardMaterial({ color: srgb(0x4a3a2a), roughness: 1 });
-      // 遠くの木立は霧で淡くなり、地平線の目印になる程度にとどめる
-      for (let i = 0; i < 44; i++) {
-        const a = (Math.random() - 0.5) * 2.2;
-        const r = 85 + Math.random() * 70;
-        const h = 5 + Math.random() * 6;
-        const x = Math.sin(a) * r, z = -Math.cos(a) * r;
-        const crown = new THREE.Mesh(new THREE.SphereGeometry(h * 0.42, 9, 7), treeMat);
-        crown.position.set(x, h * 0.95, z);
-        crown.scale.set(1.1, 1.2, 1.1);
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, h, 6), trunkMat);
-        trunk.position.set(x, h / 2, z);
-        scene.add(crown, trunk);
-      }
-
       // ---- 草木：3層。密な下草、広葉の草、背の高い葦 ----
-      const field = (r0, r1, z0, z1) => () => [
-        (Math.random() - 0.5) * 2 * lerp(r0, r1, Math.pow(Math.random(), 0.7)),
-        z0 + Math.random() * (z1 - z0),
-      ];
+      const field = (r0, r1, z0, z1) => () => {
+        const x = (Math.random() - 0.5) * 2 * lerp(r0, r1, Math.pow(Math.random(), 0.7));
+        const z = z0 + Math.random() * (z1 - z0);
+        return [x, z, hillHeight(x, z)];
+      };
       const grass = helpers.makeGrass(THREE, scene, {
-        count: 3200,
-        place: field(0, 30, -42, 10),
+        count: 4200,
+        place: field(0, 34, -60, 10),
         clusters: { count: 120, radius: 2.5, ratio: 0.6 },
         height: [0.3, 0.75],
         bladeWidth: 0.07,
         spread: 0.35,
-        color: srgb(0x7f9a3e),
+        color: srgb(0x6fae32),
         tint: 0.35,
         roughness: 0.9,
       });
       const broad = helpers.makeGrass(THREE, scene, {
         count: 420,
-        place: field(0, 26, -36, 9),
+        place: field(0, 26, -36, 3),
         clusters: { count: 40, radius: 1.8, ratio: 0.8 },
         height: [0.5, 1.0],
         blades: 3,
         bladeWidth: 0.16,
         spread: 0.55,
-        color: srgb(0x4f8a3a),
+        color: srgb(0x4c9a38),
         tint: 0.3,
         roughness: 0.85,
       });
       const reeds = helpers.makeGrass(THREE, scene, {
-        count: 360,
-        place: field(0, 24, -34, 8),
+        count: 200,
+        place: field(2, 24, -34, 1),
         clusters: { count: 30, radius: 1.6, ratio: 0.85 },
         height: [1.4, 2.4],
         blades: 6,
         bladeWidth: 0.03,
         spread: 0.22,
-        color: srgb(0xc2b36a),
+        color: srgb(0xa9b85a),
         tint: 0.25,
         roughness: 0.8,
       });
@@ -256,7 +265,7 @@
           const target = p.wind * Math.max(0, 1 + 0.9 * n);
           windNow += (target - windNow) * Math.min(1, dt * 6); // 急変を少しだけ均す
           gustPhase += windNow * dt * 0.9;                       // 突風の波は風速で進む
-          cloudDrift += windNow * dt * 0.0025;
+          cloudDrift += windNow * dt * 0.012;
           uniforms.uCloudOffset.value.x = cloudDrift;
 
           const w = { wind: windNow, sway, gustPhase, gustAmp: 0.12 * Math.min(1, windNow / 3) };
