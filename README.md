@@ -44,9 +44,9 @@ python3 -m http.server 8000
 | --- | --- | --- |
 | `night-rain` | 街灯の夜雨 | 雨量 / 風 / 落下速度 |
 | `dusk-rain` | 夕暮れの雨 | 日の高さ / 雨量 / 風 |
-| `campfire` | 焚き火 | 火の勢い / 風 / 火の粉 |
+| `campfire` | 焚き火 | 火の勢い / 風 / 火の粉 / 煙 |
 
-どのシーンも草が「風」に合わせて揺れます。焚き火の炎と火の粉も同じ「風」でなびきます。
+雨の2シーンは路肩の草が「風」に合わせて揺れます。焚き火は炎・火の粉・煙が同じ「風」でなびきます。
 
 ## シーンを追加する
 
@@ -69,6 +69,7 @@ madobe.register({
     // scene にオブジェクトを追加し、camera を配置する
     return {
       update(dt, t, params) {},   // 毎フレーム。dt は秒（0.05 でクランプ済み）、t は経過秒
+      render(renderer, scene, camera) {}, // 描画を自前でやる場合（省略可。ポストエフェクト用）
       onParam(key, value) {},     // スライダー変更時（省略可）
       dispose() {},               // 自前で作った RenderTarget などの解放（省略可）
     };
@@ -80,7 +81,8 @@ madobe.register({
 
 - `THREE.WebGLRenderer` は1つだけ作り、全シーンで共有する
 - シーン切替時は旧 `scene` を traverse して geometry / material / texture を dispose する
-- `renderer.shadowMap.enabled` と `toneMappingExposure` はシーンごとにリセットする（シーン側が `create` 内で設定してよい）
+- `renderer.shadowMap.enabled`・`toneMapping`・`toneMappingExposure` はシーンごとにリセットする（シーン側が `create` 内で設定してよい）
+- `render` フックがあるシーンはそれを呼び、なければ `renderer.render(scene, camera)` を呼ぶ
 - `resize` で `renderer.setSize` と `camera.aspect` を更新する
 - `prefers-reduced-motion` のときはカメラの揺れを止める（`ctx.reduceMotion` で渡す）
 
@@ -92,8 +94,10 @@ madobe.register({
   `RingGeometry` のプールを再利用して地面の波紋を広げます
 - `makeGrass(THREE, scene, { count, place(i) → [x, z], clusters, height, blades, bladeWidth, spread, color, roughness })` → `{ mesh, update(dt, t, { wind, sway }) }`
   風に揺れる草むら。3枚の葉を交差させた株を `InstancedMesh` で並べ（1ドローコール）、頂点シェーダーで根元を固定したまま先端を曲げます。`wind` はシーンの風パラメータと同じ単位、`sway` は揺れの強さ（0 で静止）
-- `makeFlame(THREE, scene, { layers, width, height, position, camera, colors, embers: { max } })` → `{ group, flicker, update(dt, t, { power, wind, embers }) }`
-  ゆらゆら揺れる炎。細長い板を `layers` 枚交差させて常にカメラの方へ向け、フラグメントシェーダーの fbm ノイズで輪郭と色を作ります（テクスチャ不要・加算合成）。`power` は火の勢い（1 が基準）、`wind` で先端がなびきます。`embers` を渡すと根元から火の粉（`Points`）が舞い上がり、`update` の `embers` で表示数を変えられます。`flicker.value`（約 0.8〜1.2）を光源の強さに掛けると、光が炎と同じ拍で明滅します
+- `makeFlame(THREE, scene, { layers, width, height, bright, position, camera, embers: { max }, smoke: { max, tint, opacity } })` → `{ group, flicker, update(dt, t, { power, wind, embers, smoke, pixelHeight }) }`
+  ゆらゆら揺れる炎。細長い板を `layers` 枚、少しずつ角度をずらして重ね、常にカメラの方へ向けます。形と色はフラグメントシェーダーで作ります：3D シンプレックスノイズを上向きに流し、ドメインワープで輪郭を巻き込ませ、温度に応じた黒体放射風の色（暗赤→橙→黄→白）を付けます（テクスチャ不要・加算合成・HDR）。`power` は火の勢い（1 が基準）、`wind` で先端がなびきます。`embers` で根元から舞い上がる火の粉、`smoke` で先端から立ちのぼる煙（`Points`）が付き、`update` で表示数を変えられます。`flicker.value`（約 0.8〜1.2）を光源の強さに掛けると、光が炎と同じ拍で明滅します
+- `makePost(THREE, renderer, { bloom, threshold, vignette })` → `{ render(scene, camera, { time, haze, bloom, exposure }), dispose(), hdr }`
+  ポストエフェクト。HDR のレンダーターゲット（WebGL2 なら半精度浮動小数・MSAA）にシーンを描き、1/4 解像度のブルーム（発光の滲み）と陽炎（`haze = { x, y, width, height, strength }` で指定した範囲の空気の歪み）を掛け、ACES トーンマッピングと sRGB 変換をして画面に出します。使うシーンは `create` で `renderer.toneMapping = THREE.NoToneMapping` にし（アプリ側が切替時に戻します）、`render` フックから `post.render` を呼び、`dispose` で `post.dispose()` を呼びます
 
 ## ファイル構成
 
