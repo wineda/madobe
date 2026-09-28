@@ -162,7 +162,7 @@
    * 頂点シェーダーで根元を固定したまま先端を曲げる。株の向きと揺れの位相は位置から決めるので
    * 追加の属性は不要。影は受けるが落とさない（深度マテリアルが揺れに追従しないため）。
    */
-  const GRASS_PREFIX = 'uniform float uTime;\nuniform float uWind;\nuniform float uSway;\n';
+  const GRASS_PREFIX = 'uniform float uTime;\nuniform float uWind;\nuniform float uSway;\nuniform float uGustPhase;\nuniform float uGustAmp;\n';
   const GRASS_NORMAL = `
     vec2 gPos = vec2(0.0);
     #ifdef USE_INSTANCING
@@ -188,6 +188,9 @@
       float gFlutter = sin(uTime * 3.1 + gPh) * 0.5 + sin(uTime * 5.3 + gPh * 2.3) * 0.25;
       float gAmp = uSway * (0.06 + abs(uWind) * 0.025);
       vec2 gDir = vec2(uWind * 0.07 + (gWave + gFlutter * 0.5) * gAmp, (gWave * 0.5 + gFlutter) * gAmp * 0.6);
+      // 草原を渡っていく突風の波（uGustAmp が 0 なら無効）。風下へ進む帯状の押し倒し
+      float gGust = pow(max(sin(gPos.x * 0.22 * sign(uWind + 1e-4) + gPos.y * 0.09 - uGustPhase), 0.0), 2.0);
+      gDir.x += sign(uWind + 1e-4) * gGust * uGustAmp * uSway;
       transformed.xz += gDir * gB;
       transformed.y -= dot(gDir, gDir) * gB * 0.5;
     }
@@ -265,7 +268,7 @@
       };
     }
 
-    const uniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uSway: { value: 1 } };
+    const uniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uSway: { value: 1 }, uGustPhase: { value: 0 }, uGustAmp: { value: 0 } };
     const mat = new THREE.MeshStandardMaterial({
       color, roughness, metalness: 0, side: THREE.DoubleSide, vertexColors: true,
     });
@@ -299,15 +302,71 @@
     mesh.instanceColor.needsUpdate = true;
     scene.add(mesh);
 
-    // p = { wind, sway }。wind はシーンの風パラメータ、sway は揺れの強さ（0 で静止、既定 1）
+    // p = { wind, sway, gustPhase, gustAmp }。wind はシーンの風パラメータ、sway は揺れの強さ（0 で静止、既定 1）、
+    // gustPhase / gustAmp は草原を渡る突風の波の位相（風速の積分など）と強さ（既定 0 = なし）
     function update(dt, t, p) {
       p = p || {};
       uniforms.uTime.value = t;
       uniforms.uWind.value = p.wind || 0;
       uniforms.uSway.value = p.sway !== undefined ? p.sway : 1;
+      uniforms.uGustPhase.value = p.gustPhase || 0;
+      uniforms.uGustAmp.value = p.gustAmp || 0;
     }
 
     return { mesh, material: mat, update };
+  }
+
+  /**
+   * 1/f ゆらぎ（ピンクノイズ）の時間関数。
+   * 周波数が 2 倍ずつ違う「なめらかな値ノイズ」を octaves 本重ねる。各オクターブの振幅を
+   * 2^(-k(β-1)/2) にするとパワースペクトルが 1/f^β になる：β=0 で白色（せわしない）、
+   * β=1 で 1/f（自然なゆらぎ）、β=2 でブラウン（ゆったり）。sample(t, beta) は概ね -1〜1 を返す。
+   * 風の強さ・炎の明滅・光のちらつきなど、「一定でも乱雑でもない」変化を付けたいときに使う。
+   */
+  function makeFluctuation(opts) {
+    opts = opts || {};
+    const octaves = Math.max(1, Math.floor(opts.octaves || 8));
+    const baseFreq = opts.baseFreq || 1 / 32; // 最も遅いオクターブの周波数（Hz）。既定は周期 32 秒
+    const size = 256;                           // 格子の長さ（周期的に繰り返す）
+    const lattices = [];
+    for (let k = 0; k < octaves; k++) {
+      const l = new Float32Array(size);
+      for (let i = 0; i < size; i++) l[i] = Math.random() * 2 - 1;
+      lattices.push(l);
+    }
+    const amps = new Float32Array(octaves);
+    let lastBeta = null;
+    let norm = 1;
+    function setBeta(beta) {
+      lastBeta = beta;
+      let sum = 0;
+      for (let k = 0; k < octaves; k++) {
+        amps[k] = Math.pow(2, -k * (beta - 1) / 2);
+        sum += amps[k] * amps[k];
+      }
+      norm = 1.35 / Math.sqrt(sum); // 実効値がおよそ 0.5 になるよう正規化
+    }
+    // 格子の値を 3 次のスムーズステップで補間（速いオクターブでも角ばらない）
+    function smooth(l, x) {
+      const i = Math.floor(x);
+      let f = x - i;
+      f = f * f * (3 - 2 * f);
+      const a = l[((i % size) + size) % size];
+      const b = l[(((i + 1) % size) + size) % size];
+      return a + (b - a) * f;
+    }
+    function sample(t, beta) {
+      if (beta === undefined) beta = 1;
+      if (beta !== lastBeta) setBeta(beta);
+      let v = 0;
+      let f = baseFreq;
+      for (let k = 0; k < octaves; k++) {
+        v += amps[k] * smooth(lattices[k], t * f + k * 37.1);
+        f *= 2;
+      }
+      return Math.max(-1, Math.min(1, v * norm));
+    }
+    return { sample, octaves, baseFreq };
   }
 
   /**
@@ -892,7 +951,7 @@
     return { render, dispose, hdr };
   }
 
-  const helpers = { makeRain, makeRipples, makeGrass, makeFlame, makePost };
+  const helpers = { makeRain, makeRipples, makeGrass, makeFlame, makePost, makeFluctuation };
 
 
   /* ================================================================ */

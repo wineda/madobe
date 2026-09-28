@@ -7,7 +7,7 @@
  *
  * ファイルを増やしたら APP_FILES に足し、中身を変えたら VERSION を上げる（古いキャッシュを捨てるため）。
  */
-const VERSION = 'madobe-v1';
+const VERSION = 'madobe-v2';
 const APP_CACHE = VERSION + '-app';
 const RUNTIME_CACHE = VERSION + '-runtime';
 const APP_FILES = [
@@ -18,6 +18,7 @@ const APP_FILES = [
   './src/scenes/night-rain.js',
   './src/scenes/dusk-rain.js',
   './src/scenes/campfire.js',
+  './src/scenes/windy-meadow.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',

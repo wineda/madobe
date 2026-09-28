@@ -18,6 +18,7 @@
   "shortcuts": [
     { "name": "街灯の夜雨", "url": "./#night-rain" },
     { "name": "夕暮れの雨", "url": "./#dusk-rain" },
-    { "name": "焚き火", "url": "./#campfire" }
+    { "name": "焚き火", "url": "./#campfire" },
+    { "name": "風の草原", "url": "./#windy-meadow" }
   ]
 }
