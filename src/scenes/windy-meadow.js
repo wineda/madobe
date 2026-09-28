@@ -23,14 +23,22 @@
     uniform float uCloud;
     uniform vec2 uCloudOffset;
     varying vec3 vWorldPos;
-    float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+    // 格子点のハッシュ。座標が大きくなると fract の精度が落ちて模様が四角く崩れる（特にスマホの GPU）ので、
+    // 格子座標を 256 で折り返してから、中間値が小さい計算で乱数にする。ノイズは周期 256 で継ぎ目なく繰り返す
+    float hash(vec2 p) {
+      p = mod(p, 256.0);
+      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
     float noise(vec2 p) {
       vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
       return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
     }
+    // オクターブは正確に 2 倍にして周期を保つ（雲の流れ量を JS 側で 512 ごとに折り返しても継ぎ目が出ない）
     float fbm(vec2 p) {
       float v = 0.0; float a = 0.5;
-      for (int i = 0; i < 6; i++) { v += a * noise(p); p = p * 2.03 + 17.0; a *= 0.5; }
+      for (int i = 0; i < 6; i++) { v += a * noise(p); p = p * 2.0 + vec2(17.0, 9.0); a *= 0.5; }
       return v;
     }
     // 1 層分の雲：coverage を超えた分を密度に。ふちは薄く、厚い中心ほど底が暗い
@@ -113,7 +121,7 @@
         uSunColor: { value: new THREE.Color() },
         uSunDir: { value: new THREE.Vector3(0, 1, 0) },
         uCloud: { value: 0.6 },
-        uCloudOffset: { value: new THREE.Vector2(Math.random() * 10, Math.random() * 10) },
+        uCloudOffset: { value: new THREE.Vector2(0, Math.random() * 100) },
       };
       const sky = new THREE.Mesh(
         new THREE.SphereGeometry(300, 48, 24),
@@ -233,7 +241,9 @@
           const target = p.wind * Math.max(0, 1 + 0.9 * n);
           windNow += (target - windNow) * Math.min(1, dt * 6); // 急変を少しだけ均す
           gustPhase += windNow * dt * 0.9;                       // 突風の波は風速で進む
-          cloudDrift += windNow * dt * 0.012;
+          // 流れ量はノイズの周期（256。2 層目は 1.5 倍なので 512 で両方の周期に合う）で折り返し、値を小さく保つ
+          cloudDrift = (cloudDrift + windNow * dt * 0.012) % 512;
+          if (cloudDrift < 0) cloudDrift += 512;
           uniforms.uCloudOffset.value.x = cloudDrift;
 
           groundUniforms.uGustPhase.value = gustPhase;
