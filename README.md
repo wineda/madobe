@@ -45,6 +45,8 @@ python3 -m http.server 8000
 | `night-rain` | 街灯の夜雨 | 雨量 / 風 / 落下速度 |
 | `dusk-rain` | 夕暮れの雨 | 日の高さ / 雨量 / 風 |
 
+両シーンとも路肩の草が「風」に合わせて揺れます。
+
 ## シーンを追加する
 
 1. `src/scenes/` にファイルを1つ置く
@@ -87,6 +89,8 @@ madobe.register({
   雨粒は `LineSegments`。1粒＝2頂点で、落下方向ベクトルに沿って線分を伸ばします。着地時に `onLand(x, z)` を呼び、上端で再生成します
 - `makeRipples(THREE, scene, { count, color, maxOpacity, speed })` → `{ spawn(x, z), update(dt) }`
   `RingGeometry` のプールを再利用して地面の波紋を広げます
+- `makeGrass(THREE, scene, { count, place(i) → [x, z], clusters, height, blades, bladeWidth, spread, color, roughness })` → `{ mesh, update(dt, t, { wind, sway }) }`
+  風に揺れる草むら。3枚の葉を交差させた株を `InstancedMesh` で並べ（1ドローコール）、頂点シェーダーで根元を固定したまま先端を曲げます。`wind` はシーンの風パラメータと同じ単位、`sway` は揺れの強さ（0 で静止）
 
 ## ファイル構成
 

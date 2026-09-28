@@ -115,10 +115,42 @@ madobe.register({
       if (Math.random() < 0.06 && Math.abs(x) < 12 && Math.abs(z) < 12) ripples.spawn(x, z);
     };
 
+    // ---- 草：街灯の根元と、アスファルトの端に生えた雑草。風に合わせて揺れる ----
+    const grass = helpers.makeGrass(THREE, scene, {
+      count: 900,
+      place: () => {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        return [side * (4.5 + Math.pow(Math.random(), 0.7) * 10), -14 + Math.random() * 23];
+      },
+      clusters: { count: 36, radius: 1.6, ratio: 0.75 },
+      height: [0.25, 0.7],
+      bladeWidth: 0.07,
+      spread: 0.35,
+      color: 0x2a4028,
+      roughness: 0.85,
+    });
+    // 街灯の根元の雑草
+    const tufts = helpers.makeGrass(THREE, scene, {
+      count: 60,
+      place: () => {
+        const a = Math.random() * Math.PI * 2;
+        const r = 0.3 + Math.pow(Math.random(), 0.6) * 2.2;
+        return [-1.5 + Math.cos(a) * r, Math.sin(a) * r];
+      },
+      height: [0.2, 0.55],
+      bladeWidth: 0.07,
+      spread: 0.4,
+      color: 0x2a4028,
+      roughness: 0.85,
+    });
+    const sway = reduceMotion ? 0.35 : 1;
+
     return {
       update(dt, t, p) {
         rain.update(dt, p, onLand);
         ripples.update(dt);
+        grass.update(dt, t, { wind: p.wind, sway });
+        tufts.update(dt, t, { wind: p.wind, sway });
 
         // 街灯の明滅（sin 2本の合成）
         const flick = 1 + Math.sin(t * 13.1) * 0.03 + Math.sin(t * 31.7) * 0.02;

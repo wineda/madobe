@@ -297,6 +297,34 @@
         if (Math.random() < 0.04 && Math.abs(x) < 14 && Math.abs(z) < 14) ripples.spawn(x, z);
       };
 
+      // ---- 草：道の両脇の草むらと、手前のススキ風の背高草。風に合わせて揺れる ----
+      const roadside = (inner, outer, z0, z1) => () => {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        return [side * (inner + Math.pow(Math.random(), 0.8) * (outer - inner)), z0 + Math.random() * (z1 - z0)];
+      };
+      const grass = helpers.makeGrass(THREE, scene, {
+        count: 1800,
+        place: roadside(3.6, 22, -52, 12),
+        clusters: { count: 70, radius: 2.2, ratio: 0.7 },
+        height: [0.3, 0.8],
+        bladeWidth: 0.07,
+        spread: 0.35,
+        color: srgb(0x6f6d3a),
+        roughness: 0.9,
+      });
+      const reeds = helpers.makeGrass(THREE, scene, {
+        count: 160,
+        place: roadside(4, 11, -8, 11),
+        clusters: { count: 14, radius: 1.2, ratio: 0.8 },
+        height: [1.2, 2.2],
+        blades: 6,
+        bladeWidth: 0.03,
+        spread: 0.22,
+        color: srgb(0xa08c52),
+        roughness: 0.8,
+      });
+      const sway = reduceMotion ? 0.35 : 1;
+
       // ---- 日の高さ：キーフレーム間を補間して全部に反映 ----
       const sunDir = new THREE.Vector3();
       const lightDir = new THREE.Vector3();
@@ -347,6 +375,8 @@
           }
           rain.update(dt, { count: p.count, wind: p.wind, speed: 22 }, onLand);
           ripples.update(dt);
+          grass.update(dt, t, { wind: p.wind, sway });
+          reeds.update(dt, t, { wind: p.wind, sway });
           if (!reduceMotion) {
             camera.position.x = camBase.x + Math.sin(t * 0.15) * 0.8;
             camera.position.y = camBase.y + Math.sin(t * 0.23) * 0.15;

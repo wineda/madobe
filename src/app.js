@@ -156,7 +156,160 @@
     return { spawn, update };
   }
 
-  const helpers = { makeRain, makeRipples };
+  /**
+   * 風に揺れる草むら。3枚の葉を交差させた「株」を InstancedMesh で count 個並べ（1ドローコール）、
+   * 頂点シェーダーで根元を固定したまま先端を曲げる。株の向きと揺れの位相は位置から決めるので
+   * 追加の属性は不要。影は受けるが落とさない（深度マテリアルが揺れに追従しないため）。
+   */
+  const GRASS_PREFIX = 'uniform float uTime;\nuniform float uWind;\nuniform float uSway;\n';
+  const GRASS_NORMAL = `
+    vec2 gPos = vec2(0.0);
+    #ifdef USE_INSTANCING
+      gPos = instanceMatrix[3].xz;
+    #endif
+    float gHash = fract(sin(dot(gPos, vec2(12.9898, 78.233))) * 43758.5453);
+    float gAng = gHash * 6.2831853;
+    mat2 gRot = mat2(cos(gAng), -sin(gAng), sin(gAng), cos(gAng));
+    vec3 objectNormal = vec3(normal);
+    objectNormal.xz = gRot * objectNormal.xz;
+    #ifdef USE_TANGENT
+      vec3 objectTangent = vec3(tangent.xyz);
+    #endif
+  `;
+  const GRASS_BEND = `
+    vec3 transformed = vec3(position);
+    transformed.xz = gRot * transformed.xz;
+    {
+      float gH = clamp(position.y, 0.0, 1.0);
+      float gB = gH * gH;
+      float gPh = gHash * 6.2831853;
+      float gWave = sin(uTime * 1.7 - gPos.x * 0.35 + gPos.y * 0.2 + gPh * 0.5);
+      float gFlutter = sin(uTime * 3.1 + gPh) * 0.5 + sin(uTime * 5.3 + gPh * 2.3) * 0.25;
+      float gAmp = uSway * (0.06 + abs(uWind) * 0.025);
+      vec2 gDir = vec2(uWind * 0.07 + (gWave + gFlutter * 0.5) * gAmp, (gWave * 0.5 + gFlutter) * gAmp * 0.6);
+      transformed.xz += gDir * gB;
+      transformed.y -= dot(gDir, gDir) * gB * 0.5;
+    }
+  `;
+
+  // 1株分の葉。blades 枚を放射状に配置し、葉ごとに高さと外側への反りを変える。
+  // 高さ 1 に正規化し、葉の幅と反りは高さに対する比で与える（実寸はインスタンスの一様スケール）
+  const BLADE_H = [1, 0.72, 0.88, 0.62, 0.95, 0.8, 0.7];
+  const BLADE_LEAN = [0.6, 1, 0.8, 1.2, 0.7, 1.1, 0.9];
+  function clumpGeometry(THREE, blades, segs, bladeWidth, spread) {
+    const pos = [], nrm = [], col = [], idx = [];
+    for (let b = 0; b < blades; b++) {
+      const a = (b / blades) * Math.PI * 2 + b * 0.37;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const hf = BLADE_H[b % BLADE_H.length];
+      const lean = spread * BLADE_LEAN[b % BLADE_LEAN.length];
+      const base = pos.length / 3;
+      for (let sgm = 0; sgm <= segs; sgm++) {
+        const v = sgm / segs;
+        const out = 0.03 + lean * v * v;                     // 外側への反り
+        const half = 0.5 * bladeWidth * (1 - Math.pow(v, 1.5)); // 先端に向かって細くなる
+        const shade = 0.4 + 0.6 * v;                          // 根元は暗く、先端ほど明るい
+        for (let side = -1; side <= 1; side += 2) {
+          pos.push(ca * out - sa * half * side, v * hf, sa * out + ca * half * side);
+          nrm.push(ca, 0, sa);
+          col.push(shade, shade, shade);
+        }
+      }
+      for (let sgm = 0; sgm < segs; sgm++) {
+        const i0 = base + sgm * 2;
+        idx.push(i0, i0 + 1, i0 + 2, i0 + 1, i0 + 3, i0 + 2);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    return geo;
+  }
+
+  function makeGrass(THREE, scene, opts) {
+    opts = opts || {};
+    const count = Math.max(1, Math.floor(opts.count || 1000));
+    const area = Object.assign({ x: [-15, 15], z: [-15, 15] }, opts.area);
+    const place = typeof opts.place === 'function'
+      ? opts.place
+      : () => [
+        area.x[0] + Math.random() * (area.x[1] - area.x[0]),
+        area.z[0] + Math.random() * (area.z[1] - area.z[0]),
+      ];
+    const height = opts.height || [0.4, 1.0];
+    const blades = opts.blades || 5;                                       // 1株の葉の枚数
+    const bladeWidth = opts.bladeWidth !== undefined ? opts.bladeWidth : 0.06; // 葉の幅（高さに対する比）
+    const spread = opts.spread !== undefined ? opts.spread : 0.3;          // 外側への反り（高さに対する比）
+    const color = opts.color !== undefined ? opts.color : 0x4c6b3a;
+    const tint = opts.tint !== undefined ? opts.tint : 0.3; // 株ごとの明るさのばらつき
+    const roughness = opts.roughness !== undefined ? opts.roughness : 0.85;
+
+    // clusters = { count, radius, ratio }：株の ratio 割を count 個の中心のまわりに集めて群生させる
+    let placer = place;
+    if (opts.clusters) {
+      const cc = Math.max(1, Math.floor(opts.clusters.count || 40));
+      const radius = opts.clusters.radius !== undefined ? opts.clusters.radius : 1.5;
+      const ratio = opts.clusters.ratio !== undefined ? opts.clusters.ratio : 0.7;
+      const centers = [];
+      for (let i = 0; i < cc; i++) centers.push(place(i));
+      placer = (i) => {
+        if (Math.random() >= ratio) return place(i);
+        const c = centers[Math.floor(Math.random() * cc)];
+        return [
+          c[0] + radius * (Math.random() + Math.random() - 1),
+          c[1] + radius * (Math.random() + Math.random() - 1),
+        ];
+      };
+    }
+
+    const uniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uSway: { value: 1 } };
+    const mat = new THREE.MeshStandardMaterial({
+      color, roughness, metalness: 0, side: THREE.DoubleSide, vertexColors: true,
+    });
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, uniforms);
+      shader.vertexShader = GRASS_PREFIX + shader.vertexShader
+        .replace('#include <beginnormal_vertex>', GRASS_NORMAL)
+        .replace('#include <begin_vertex>', GRASS_BEND);
+    };
+    mat.customProgramCacheKey = () => 'madobe-grass';
+
+    const mesh = new THREE.InstancedMesh(clumpGeometry(THREE, blades, 5, bladeWidth, spread), mat, count);
+    mesh.frustumCulled = false;
+    mesh.receiveShadow = opts.receiveShadow !== false;
+    const m = new THREE.Matrix4();
+    const pv = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const sv = new THREE.Vector3();
+    const c = new THREE.Color();
+    for (let i = 0; i < count; i++) {
+      const xz = placer(i);
+      const h = height[0] + Math.random() * (height[1] - height[0]);
+      pv.set(xz[0], 0, xz[1]);
+      sv.set(h, h, h);
+      mesh.setMatrixAt(i, m.compose(pv, q, sv));
+      const k = 1 - tint / 2 + Math.random() * tint;
+      c.setRGB(k, k * (1 - tint * 0.15 + Math.random() * tint * 0.3), k);
+      mesh.setColorAt(i, c);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor.needsUpdate = true;
+    scene.add(mesh);
+
+    // p = { wind, sway }。wind はシーンの風パラメータ、sway は揺れの強さ（0 で静止、既定 1）
+    function update(dt, t, p) {
+      p = p || {};
+      uniforms.uTime.value = t;
+      uniforms.uWind.value = p.wind || 0;
+      uniforms.uSway.value = p.sway !== undefined ? p.sway : 1;
+    }
+
+    return { mesh, material: mat, update };
+  }
+
+  const helpers = { makeRain, makeRipples, makeGrass };
 
   /* ================================================================ */
   /* 登録                                                              */
