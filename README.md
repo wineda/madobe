@@ -44,8 +44,9 @@ python3 -m http.server 8000
 | --- | --- | --- |
 | `night-rain` | 街灯の夜雨 | 雨量 / 風 / 落下速度 |
 | `dusk-rain` | 夕暮れの雨 | 日の高さ / 雨量 / 風 |
+| `campfire` | 焚き火 | 火の勢い / 風 / 火の粉 |
 
-両シーンとも路肩の草が「風」に合わせて揺れます。
+どのシーンも草が「風」に合わせて揺れます。焚き火の炎と火の粉も同じ「風」でなびきます。
 
 ## シーンを追加する
 
@@ -91,6 +92,8 @@ madobe.register({
   `RingGeometry` のプールを再利用して地面の波紋を広げます
 - `makeGrass(THREE, scene, { count, place(i) → [x, z], clusters, height, blades, bladeWidth, spread, color, roughness })` → `{ mesh, update(dt, t, { wind, sway }) }`
   風に揺れる草むら。3枚の葉を交差させた株を `InstancedMesh` で並べ（1ドローコール）、頂点シェーダーで根元を固定したまま先端を曲げます。`wind` はシーンの風パラメータと同じ単位、`sway` は揺れの強さ（0 で静止）
+- `makeFlame(THREE, scene, { layers, width, height, position, camera, colors, embers: { max } })` → `{ group, flicker, update(dt, t, { power, wind, embers }) }`
+  ゆらゆら揺れる炎。細長い板を `layers` 枚交差させて常にカメラの方へ向け、フラグメントシェーダーの fbm ノイズで輪郭と色を作ります（テクスチャ不要・加算合成）。`power` は火の勢い（1 が基準）、`wind` で先端がなびきます。`embers` を渡すと根元から火の粉（`Points`）が舞い上がり、`update` の `embers` で表示数を変えられます。`flicker.value`（約 0.8〜1.2）を光源の強さに掛けると、光が炎と同じ拍で明滅します
 
 ## ファイル構成
 
@@ -100,7 +103,8 @@ madobe/
 ├─ src/app.js            レンダラ、シーン切替、UI自動生成、共通ヘルパー
 ├─ src/scenes/
 │  ├─ night-rain.js      街灯の夜雨
-│  └─ dusk-rain.js       夕暮れの雨
+│  ├─ dusk-rain.js       夕暮れの雨
+│  └─ campfire.js        焚き火
 ├─ .github/workflows/pages.yml   GitHub Pages への自動デプロイ
 └─ README.md
 ```

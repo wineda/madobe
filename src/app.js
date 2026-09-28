@@ -4,7 +4,7 @@
  *   - THREE.WebGLRenderer を1つだけ作り、全シーンで共有する
  *   - シーンの登録（madobe.register）・切替（URL ハッシュ）・破棄
  *   - シーン定義の params からスライダーを自動生成する
- *   - 共通ヘルパー（雨・波紋）を ctx.helpers で渡す
+ *   - 共通ヘルパー（雨・波紋・草・炎）を ctx.helpers で渡す
  *
  * シーンの契約は README.md を参照。
  */
@@ -309,7 +309,246 @@
     return { mesh, material: mat, update };
   }
 
-  const helpers = { makeRain, makeRipples, makeGrass };
+  /**
+   * ゆらゆら揺れる炎。細長い板を layers 枚、Y 軸まわりに等間隔で交差させ、常にカメラの方を向かせる。
+   * 形と色はフラグメントシェーダーで作る（fbm ノイズを上向きに流し、輪郭を歪ませる）ので
+   * テクスチャは不要。加算合成なので重ねるほど芯が明るくなる。
+   * embers を指定すると、根元から舞い上がる火の粉（Points）も付く。
+   * update が返す flicker（およそ 0.8〜1.2）を光源の強さに掛けると、光も炎と同じ拍で明滅する。
+   */
+  const FLAME_VERT = `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+  const FLAME_FRAG = `
+    uniform float uTime;
+    uniform float uWind;
+    uniform float uPower;
+    uniform float uSeed;
+    uniform float uAlpha;
+    uniform vec3 uCore;
+    uniform vec3 uMid;
+    uniform vec3 uTip;
+    varying vec2 vUv;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float vnoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+        f.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int i = 0; i < 4; i++) {
+        v += a * vnoise(p);
+        p = p * 2.03 + vec2(1.7, 9.2);
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    void main() {
+      float y = vUv.y;                 // 0 = 根元, 1 = 先端
+      float x = vUv.x * 2.0 - 1.0;     // -1 .. 1
+      // 風で先端ほど流される
+      x -= uWind * 0.28 * y * y;
+      // 上向きに流れるノイズで輪郭を歪ませる（先端ほど大きく）
+      vec2 np = vec2(x * 1.6 + uSeed, y * 2.6 - uTime * 1.7);
+      float n = fbm(np);
+      float n2 = fbm(np * 2.1 + vec2(3.1 + uSeed, -uTime * 0.9));
+      x += (n - 0.5) * (0.4 + y * 1.3);
+      // 先端に向かって細くなる幅。n2 で太さも揺らす
+      float w = 0.85 * pow(max(1.0 - y, 0.0), 0.6) * (0.8 + 0.4 * n2);
+      float d = abs(x) / max(w, 0.001);
+      float body = 1.0 - smoothstep(0.45, 1.0, d);
+      body *= smoothstep(0.0, 0.1, y);                              // 根元をぼかす
+      body *= 1.0 - smoothstep(0.72, 1.0, y + (n - 0.5) * 0.5);      // 先端は千切れて消える
+      if (body <= 0.001) discard;
+      // 熱さ：根元の中心ほど高い
+      float heat = body * (1.0 - y * 0.6) * (0.35 + n * 0.8) * (0.75 + uPower * 0.25);
+      vec3 col = mix(uTip, uMid, smoothstep(0.1, 0.42, heat));
+      col = mix(col, uCore, smoothstep(0.6, 1.0, heat));
+      gl_FragColor = vec4(col, body * uAlpha);
+      #include <tonemapping_fragment>
+      #include <encodings_fragment>
+    }
+  `;
+  const EMBER_VERT = `
+    attribute float aLife;
+    attribute float aSize;
+    uniform float uScale;
+    varying float vLife;
+    void main() {
+      vLife = aLife;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uScale / max(-mv.z, 0.1);
+      gl_Position = projectionMatrix * mv;
+    }
+  `;
+  const EMBER_FRAG = `
+    varying float vLife;
+    void main() {
+      vec2 c = gl_PointCoord - 0.5;
+      float d = length(c) * 2.0;
+      float a = 1.0 - smoothstep(0.15, 1.0, d);
+      float fade = smoothstep(0.0, 0.08, vLife) * (1.0 - smoothstep(0.55, 1.0, vLife));
+      vec3 col = mix(vec3(1.0, 0.86, 0.5), vec3(1.0, 0.3, 0.04), smoothstep(0.1, 0.8, vLife));
+      gl_FragColor = vec4(col, a * fade);
+      #include <tonemapping_fragment>
+      #include <encodings_fragment>
+    }
+  `;
+
+  function makeFlame(THREE, scene, opts) {
+    opts = opts || {};
+    const layers = Math.max(1, Math.floor(opts.layers || 3));
+    const width = opts.width !== undefined ? opts.width : 0.9;
+    const height = opts.height !== undefined ? opts.height : 1.6;
+    const camera = opts.camera || null;
+    const seed = opts.seed !== undefined ? opts.seed : Math.random() * 100;
+    const colors = Object.assign({ core: 0xfff3c4, mid: 0xff8a1f, tip: 0xc81e05 }, opts.colors);
+
+    const group = new THREE.Group();
+    if (opts.position) group.position.copy(opts.position);
+    scene.add(group);
+
+    const geo = new THREE.PlaneGeometry(1, 1, 1, 8);
+    geo.translate(0, 0.5, 0); // 根元を原点に
+    const uniformsList = [];
+    const meshes = [];
+    for (let i = 0; i < layers; i++) {
+      const uniforms = {
+        uTime: { value: 0 },
+        uWind: { value: 0 },
+        uPower: { value: 1 },
+        uSeed: { value: seed + i * 7.3 },
+        uAlpha: { value: 1 / Math.sqrt(layers) },
+        uCore: { value: new THREE.Color(colors.core) },
+        uMid: { value: new THREE.Color(colors.mid) },
+        uTip: { value: new THREE.Color(colors.tip) },
+      };
+      const mat = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: FLAME_VERT,
+        fragmentShader: FLAME_FRAG,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.y = (i / layers) * Math.PI;
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      uniformsList.push(uniforms);
+      meshes.push(mesh);
+    }
+
+    // ---- 火の粉 ----
+    let embers = null;
+    if (opts.embers) {
+      const max = Math.max(1, Math.floor(opts.embers.max || 200));
+      const pos = new Float32Array(max * 3);
+      const life = new Float32Array(max);
+      const size = new Float32Array(max);
+      const vx = new Float32Array(max), vy = new Float32Array(max), vz = new Float32Array(max);
+      const span = new Float32Array(max);
+      const ph = new Float32Array(max);
+      const spawn = (i, power) => {
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.random() * width * 0.3;
+        pos[i * 3] = Math.cos(a) * r;
+        pos[i * 3 + 1] = Math.random() * height * 0.25;
+        pos[i * 3 + 2] = Math.sin(a) * r;
+        vx[i] = (Math.random() - 0.5) * 0.4;
+        vz[i] = (Math.random() - 0.5) * 0.4;
+        vy[i] = (1.0 + Math.random() * 1.5) * (0.6 + power * 0.4);
+        span[i] = 1.2 + Math.random() * 1.8;
+        size[i] = 0.05 + Math.random() * 0.07;
+        ph[i] = Math.random() * Math.PI * 2;
+      };
+      for (let i = 0; i < max; i++) {
+        spawn(i, 1);
+        life[i] = Math.random(); // 最初からばらけさせる
+      }
+      const egeo = new THREE.BufferGeometry();
+      const posAttr = new THREE.BufferAttribute(pos, 3);
+      const lifeAttr = new THREE.BufferAttribute(life, 1);
+      posAttr.setUsage(THREE.DynamicDrawUsage);
+      lifeAttr.setUsage(THREE.DynamicDrawUsage);
+      egeo.setAttribute('position', posAttr);
+      egeo.setAttribute('aLife', lifeAttr);
+      egeo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+      const emat = new THREE.ShaderMaterial({
+        uniforms: { uScale: { value: 300 } },
+        vertexShader: EMBER_VERT,
+        fragmentShader: EMBER_FRAG,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const points = new THREE.Points(egeo, emat);
+      points.frustumCulled = false;
+      group.add(points);
+      let drawn = -1;
+      embers = {
+        points,
+        update(dt, t, count, wind, power) {
+          count = Math.max(0, Math.min(max, Math.floor(count)));
+          for (let i = 0; i < count; i++) {
+            life[i] += dt / span[i];
+            if (life[i] >= 1) { spawn(i, power); life[i] = 0; }
+            // 風に流され、上昇はゆっくり弱まり、左右にふらつく
+            vx[i] += (wind * 0.8 - vx[i]) * dt * 0.9 + Math.sin(t * 3.1 + ph[i]) * dt * 1.2;
+            vz[i] += (0 - vz[i]) * dt * 0.9 + Math.cos(t * 2.7 + ph[i] * 1.3) * dt * 1.2;
+            vy[i] += (0.5 - vy[i]) * dt * 0.5;
+            pos[i * 3] += vx[i] * dt;
+            pos[i * 3 + 1] += vy[i] * dt;
+            pos[i * 3 + 2] += vz[i] * dt;
+          }
+          posAttr.needsUpdate = true;
+          lifeAttr.needsUpdate = true;
+          if (drawn !== count) { egeo.setDrawRange(0, count); drawn = count; }
+        },
+        setScale(v) { emat.uniforms.uScale.value = v; },
+      };
+    }
+
+    const flicker = { value: 1 };
+
+    // p = { power, wind, embers }。power は火の勢い（1 が基準）、wind は風、embers は火の粉の数
+    function update(dt, t, p) {
+      p = p || {};
+      const power = p.power !== undefined ? p.power : 1;
+      const wind = p.wind || 0;
+      // 炎の拍：周期の違う sin を重ねて不規則に見せる
+      flicker.value = 1 + Math.sin(t * 9.3) * 0.08 + Math.sin(t * 17.1 + 1.3) * 0.06 + Math.sin(t * 29.7 + 0.4) * 0.04;
+      const h = height * Math.pow(power, 0.6) * (0.92 + flicker.value * 0.08);
+      const w = width * Math.pow(power, 0.35);
+      if (camera) group.rotation.y = Math.atan2(camera.position.x - group.position.x, camera.position.z - group.position.z);
+      for (let i = 0; i < layers; i++) {
+        const u = uniformsList[i];
+        u.uTime.value = t * (0.9 + i * 0.12);
+        u.uWind.value = wind;
+        u.uPower.value = power;
+        const k = 1 - i * (0.5 / layers);
+        meshes[i].scale.set(w * k, h * (1 - i * 0.08), 1);
+      }
+      if (embers) embers.update(dt, t, p.embers !== undefined ? p.embers : 0, wind, power);
+    }
+
+    return { group, flicker, update, embers };
+  }
+
+  const helpers = { makeRain, makeRipples, makeGrass, makeFlame };
 
   /* ================================================================ */
   /* 登録                                                              */
