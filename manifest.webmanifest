@@ -1,0 +1,23 @@
+{
+  "name": "madobe（窓辺）",
+  "short_name": "madobe",
+  "description": "天気と時間帯の生きたシーンを眺める、作業用の背景映像",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#070a10",
+  "theme_color": "#070a10",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "街灯の夜雨", "url": "./#night-rain" },
+    { "name": "夕暮れの雨", "url": "./#dusk-rain" },
+    { "name": "焚き火", "url": "./#campfire" }
+  ]
+}

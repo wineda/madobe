@@ -4,6 +4,7 @@
  *   - THREE.WebGLRenderer を1つだけ作り、全シーンで共有する
  *   - シーンの登録（madobe.register）・切替（URL ハッシュ）・破棄
  *   - シーン定義の params からスライダーを自動生成する
+ *   - PWA：Service Worker の登録と「インストール」ボタン
  *   - 共通ヘルパー（雨・波紋・草・炎）を ctx.helpers で渡す
  *
  * シーンの契約は README.md を参照。
@@ -934,7 +935,10 @@
       params: document.getElementById('params'),
       hideBtn: document.getElementById('hide-ui'),
       fsBtn: document.getElementById('fullscreen'),
+      installBtn: document.getElementById('install'),
     };
+
+    setupPwa();
 
     if (!window.THREE) {
       notice('three.js を読み込めませんでした。ネットワーク接続を確認して再読み込みしてください。');
@@ -979,6 +983,38 @@
     show(first);
     if (location.hash.slice(1) !== first) history.replaceState(null, '', '#' + first);
     requestAnimationFrame(tick);
+  }
+
+  /* ================================================================ */
+  /* PWA                                                               */
+  /* ================================================================ */
+
+  function setupPwa() {
+    // Service Worker：http(s) で開いたときだけ登録する（file:// では動かない）
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch((e) => console.warn('madobe: Service Worker を登録できませんでした', e));
+      });
+    }
+
+    // インストールボタン：ブラウザが beforeinstallprompt を出したときだけ表示する
+    let deferred = null;
+    const btn = dom.installBtn;
+    if (!btn) return;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferred = e;
+      btn.hidden = false;
+    });
+    btn.addEventListener('click', () => {
+      if (!deferred) return;
+      const ev = deferred;
+      deferred = null;
+      btn.hidden = true;
+      ev.prompt();
+      if (ev.userChoice) ev.userChoice.then((r) => { if (r && r.outcome !== 'accepted') { deferred = ev; btn.hidden = false; } }).catch(() => {});
+    });
+    window.addEventListener('appinstalled', () => { deferred = null; btn.hidden = true; });
   }
 
   function idFromHash() {
