@@ -28,6 +28,17 @@ python3 -m http.server 8000
 
 公開 URL は `https://<ユーザー名>.github.io/madobe/` です。
 
+### アプリとしてインストールする（PWA）
+
+公開 URL（https）または `localhost` で開くと、PWA としてインストールできます。
+
+- **Android / PC の Chrome・Edge**：右下パネルの「インストール」ボタン、またはアドレスバーのインストールアイコン
+- **iOS / iPadOS の Safari**：共有メニュー →「ホーム画面に追加」（iOS には `beforeinstallprompt` がないのでボタンは出ません）
+
+インストール後は全画面（`display: fullscreen`）で起動し、ホーム画面のショートカットから各シーンを直接開けます。
+`sw.js` がアプリ本体と three.js・フォントをキャッシュするので、2回目以降はオフラインでも動きます。
+ファイルを増やしたら `sw.js` の `APP_FILES` に足し、中身を変えたら `VERSION` を上げてください（古いキャッシュを捨てるため）。
+
 ## 操作
 
 | 操作 | 内容 |
@@ -36,6 +47,7 @@ python3 -m http.server 8000
 | 右下のスライダー | シーンごとのパラメータ |
 | UIを隠す | 上下の UI をフェードアウト。画面タップ / `Esc` で戻ります |
 | 全画面 | `requestFullscreen`（iOS Safari では効きません） |
+| インストール | PWA としてホーム画面 / デスクトップに追加（ブラウザが対応しているときだけ表示） |
 | キーボード | `h` UI 表示切替、`f` 全画面、`←` `→` シーン切替 |
 
 ## シーン
@@ -104,7 +116,10 @@ madobe.register({
 ```
 madobe/
 ├─ index.html            シェル。タブ・タイトル・パネル・スクリプト読み込み
-├─ src/app.js            レンダラ、シーン切替、UI自動生成、共通ヘルパー
+├─ manifest.webmanifest  PWA のマニフェスト（名前・アイコン・表示モード・ショートカット）
+├─ sw.js                 Service Worker（アプリ本体と CDN のキャッシュ）
+├─ icons/                PWA のアイコン（icon.svg が元。PNG は 192 / 512 / maskable / apple-touch）
+├─ src/app.js            レンダラ、シーン切替、UI自動生成、共通ヘルパー、PWA の登録
 ├─ src/scenes/
 │  ├─ night-rain.js      街灯の夜雨
 │  ├─ dusk-rain.js       夕暮れの雨
@@ -130,4 +145,4 @@ madobe/
 5. 地面に `Reflector` で本物の映り込み
 6. 音（外部サービスへのリンクか、ユーザーが選んだ音源の再生のみ。自作しない）
 
-v0 で作らないもの：音、アカウント、設定の保存・共有、シーンエディタ、作業タイマー、PWA/オフライン
+v0 で作らないもの：音、アカウント、設定の保存・共有、シーンエディタ、作業タイマー
