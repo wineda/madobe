@@ -86,19 +86,37 @@ madobe.register({
     bed.position.y = 0.02;
     scene.add(bed);
 
-    // ---- 石の囲い：多面体の頂点を位置ハッシュでランダムに凹凸させて岩らしく ----
-    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x3b3835, roughness: 0.92, metalness: 0.02, flatShading: true });
+    // ---- 石の囲い：細かく割った球を、なめらかな凹凸でゆがめて川原の丸石らしく ----
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x3b3835, roughness: 0.92, metalness: 0.02 });
     const rockGeometry = (seed) => {
-      const g = new THREE.IcosahedronGeometry(0.27, 1);
+      const g = new THREE.IcosahedronGeometry(0.27, 4);
       const pos = g.attributes.position;
       const v = new THREE.Vector3();
       for (let i = 0; i < pos.count; i++) {
         v.fromBufferAttribute(pos, i);
-        const hsh = Math.abs(Math.sin(v.x * 12.9 + seed) * 43758.5 + Math.sin(v.y * 78.2 - seed) * 1234.5 + Math.sin(v.z * 37.7) * 99.1) % 1;
-        v.multiplyScalar(0.78 + hsh * 0.42);
+        // 位置だけで決まるなめらかな凹凸（同じ位置の頂点は同じだけ動くので面が割れない）
+        const d = v.clone().normalize();
+        const k = 1
+          + 0.16 * Math.sin(d.x * 2.3 + seed) + 0.14 * Math.sin(d.y * 2.9 + seed * 1.7) + 0.14 * Math.sin(d.z * 2.6 + seed * 0.6)
+          + 0.05 * Math.sin(d.x * 6.1 + d.z * 5.3 + seed * 2.3) + 0.04 * Math.sin(d.y * 7.7 - d.x * 4.9 + seed);
+        v.multiplyScalar(k);
         pos.setXYZ(i, v.x, v.y * 0.7, v.z);
       }
+      // 頂点を共有しない形状なので、同じ位置の面法線を足し合わせてなめらかな法線にする
       g.computeVertexNormals();
+      const nor = g.attributes.normal;
+      const sums = new Map();
+      const keyOf = (i) => Math.round(pos.getX(i) * 1e4) + ',' + Math.round(pos.getY(i) * 1e4) + ',' + Math.round(pos.getZ(i) * 1e4);
+      for (let i = 0; i < pos.count; i++) {
+        const key = keyOf(i);
+        let n = sums.get(key);
+        if (!n) { n = new THREE.Vector3(); sums.set(key, n); }
+        n.x += nor.getX(i); n.y += nor.getY(i); n.z += nor.getZ(i);
+      }
+      for (let i = 0; i < pos.count; i++) {
+        const n = v.copy(sums.get(keyOf(i))).normalize();
+        nor.setXYZ(i, n.x, n.y, n.z);
+      }
       return g;
     };
     const stones = 14;
@@ -128,7 +146,21 @@ madobe.register({
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance *= vGlow * vGlow;');
     };
     logMat.customProgramCacheKey = () => 'madobe-campfire-log';
-    const logGeo = new THREE.CylinderGeometry(0.1, 0.125, 1.35, 12);
+    // 断面を回転させて作る。両端の角を丸め、側面も細かく割ってなめらかに
+    const logProfile = [];
+    const logHalf = 0.675, logRound = 0.035;
+    const logRadius = (y) => 0.1125 - (y / logHalf) * 0.0125; // 下端 0.125 → 上端 0.1
+    logProfile.push(new THREE.Vector2(0.001, -logHalf));
+    for (let i = 0; i <= 6; i++) {
+      const a = (i / 6) * Math.PI / 2;
+      logProfile.push(new THREE.Vector2(logRadius(-logHalf) - logRound * (1 - Math.sin(a)), -logHalf + logRound * (1 - Math.cos(a))));
+    }
+    for (let i = 6; i >= 0; i--) {
+      const a = (i / 6) * Math.PI / 2;
+      logProfile.push(new THREE.Vector2(logRadius(logHalf) - logRound * (1 - Math.sin(a)), logHalf - logRound * (1 - Math.cos(a))));
+    }
+    logProfile.push(new THREE.Vector2(0.001, logHalf));
+    const logGeo = new THREE.LatheGeometry(logProfile, 32);
     const up = new THREE.Vector3(0, 1, 0);
     for (let i = 0; i < 3; i++) {
       const a = (i / 3) * Math.PI * 2 + 0.4;

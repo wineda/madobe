@@ -7,7 +7,7 @@
  *
  * ファイルを増やしたら APP_FILES に足し、中身を変えたら VERSION を上げる（古いキャッシュを捨てるため）。
  */
-const VERSION = 'madobe-v3';
+const VERSION = 'madobe-v5';
 const APP_CACHE = VERSION + '-app';
 const RUNTIME_CACHE = VERSION + '-runtime';
 const APP_FILES = [

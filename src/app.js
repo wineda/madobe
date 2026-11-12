@@ -371,9 +371,9 @@
 
   /**
    * ゆらゆら揺れる炎。細長い板を layers 枚、カメラの方を向けて少しずつ角度をずらして重ねる。
-   * 形と色はフラグメントシェーダーで作る：3D シンプレックスノイズを上向きに流し、ドメインワープで
-   * 輪郭を巻き込ませ、温度に応じた黒体放射風の色（暗赤→橙→黄→白、根元にかすかな青）を付ける。
-   * テクスチャは不要。加算合成で HDR 値を出すので、makePost のブルームと組み合わせると芯が発光する。
+   * 形と色はフラグメントシェーダーで作る：起動時に生成したノイズテクスチャを上向きに流し、大きなうねりで
+   * 全体をしならせ、輪郭をなだらかにぼかしつつ、温度に応じた黒体放射風の色（暗赤→橙→黄→白）を付ける。
+   * 画像ファイルは不要。加算合成で HDR 値を出すので、makePost のブルームと組み合わせると芯が発光する。
    * embers を指定すると根元から舞い上がる火の粉、smoke を指定すると先端から立ちのぼる煙が付く。
    * update が返す flicker（およそ 0.8〜1.2）を光源の強さに掛けると、光も炎と同じ拍で明滅する。
    */
@@ -452,47 +452,101 @@
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
-  const FLAME_FRAG = NOISE_GLSL + `
+  const FLAME_FRAG = `
+    uniform sampler2D uNoise;
     uniform float uTime;
     uniform float uWind;
     uniform float uPower;
     uniform float uSeed;
     uniform float uAlpha;
     uniform float uBright;
+    uniform float uSpan;
     varying vec2 vUv;
 
     void main() {
-      float y = vUv.y;                 // 0 = 根元, 1 = 先端
-      float x = vUv.x * 2.0 - 1.0;     // -1 .. 1
+      float y = vUv.y;                           // 0 = 根元, 1 = 先端
+      float qx = vUv.x * 2.0 - 1.0;              // 板の中での位置 -1 .. 1
+      float x = qx * uSpan;                      // 炎の基準の半幅を 1 とした位置（板は炎より広い）
       // 風で先端ほど流される
       x -= uWind * 0.3 * y * y;
-      // 上向きに流れるノイズ。ドメインワープで渦を巻き込ませる
-      vec3 p = vec3(x * 1.8, y * 2.2 - uTime * 1.9, uSeed + uTime * 0.35);
-      vec2 q = vec2(fbm(p), fbm(p + vec3(5.2, 1.3, 0.0)));
-      float n = fbm(p + vec3(q * 0.9, 0.0));                 // -1 .. 1
-      float n2 = fbm(p * 1.7 + vec3(q * 0.5, 2.0));
-      x += n * (0.25 + y * 0.9);
-      // 先端に向かって細くなる幅。n2 で太さも揺らす
-      float w = 0.85 * pow(max(1.0 - y, 0.0), 0.6) * (0.85 + 0.3 * n2);
-      float d = abs(x) / max(w, 0.001);
-      float yy = y + n * 0.35;                               // 先端はノイズで千切れる
-      float v = (1.0 - d * d) * (1.0 - smoothstep(0.5, 1.0, yy));
-      v *= smoothstep(0.0, 0.18, y);                         // 根元をぼかす
-      v *= 0.75 + 0.5 * n2;
+      vec2 so = vec2(uSeed * 0.37, uSeed * 0.61);
+      // 大きくゆっくりしたうねり：炎全体が左右にしなり、先端ほど大きく振れる
+      vec2 sway = texture2D(uNoise, vec2(x * 0.07, y * 0.16 - uTime * 0.13) + so).rg - 0.5;
+      x += sway.x * (0.2 + 1.4 * y);
+      float yy = y + sway.y * 0.35 * y;
+      // 上向きに流れる 2 層のノイズ。速さと細かさを変えて重ね、舌のように伸びる形を作る
+      float n1 = texture2D(uNoise, vec2(x * 0.13, yy * 0.26 - uTime * 0.36) + so.yx).b;
+      float n2 = texture2D(uNoise, vec2(x * 0.27, yy * 0.5 - uTime * 0.6) - so).a;
+      float n = n1 * 0.62 + n2 * 0.38;           // 0 .. 1
+      // 先端に向かって細くなる幅。根元は少し絞り、n1 で太さも揺らす
+      float w = pow(max(1.0 - y, 0.0), 0.6) * (0.66 + 0.5 * n1) * mix(0.55, 1.0, smoothstep(0.0, 0.25, y));
+      // 輪郭からの距離（内側が正）。上へ行くほどノイズで大きく削り、先端を千切る
+      float e = w - abs(x) + (n - 0.5) * (0.2 + 1.2 * y) - 0.06 * y;
+      // 輪郭は幅を持たせてなだらかに立ち上げる（硬い縁を作らない）
+      float v = smoothstep(-0.08, 0.3, e);
+      v *= smoothstep(0.0, 0.14, y);                           // 根元をぼかす
+      v *= 1.0 - smoothstep(0.82, 1.0, y);                     // 板の上端で切れないように
+      v *= 1.0 - smoothstep(0.75, 1.0, abs(qx));               // 板の左右端で切れないように
       v *= 0.85 + 0.15 * uPower;
-      if (v <= 0.0) discard;
-      float alpha = smoothstep(0.0, 0.3, v);
-      // 温度：根元の中心ほど高い → 黒体放射風の色
-      float T = clamp(v * (1.15 - y * 0.55) * smoothstep(0.0, 0.3, y), 0.0, 1.0);
-      vec3 col = mix(vec3(0.35, 0.02, 0.0), vec3(1.0, 0.32, 0.03), smoothstep(0.0, 0.35, T));
-      col = mix(col, vec3(1.0, 0.78, 0.22), smoothstep(0.35, 0.7, T));
-      col = mix(col, vec3(1.0, 0.96, 0.86), smoothstep(0.7, 1.0, T));
-      float hdr = uBright * (0.6 + 1.6 * T * T);
-      gl_FragColor = vec4(col * hdr, alpha * uAlpha);
+      // 温度：輪郭から深く、根元に近いほど高い → 黒体放射風の色
+      // 細かい縦の筋を温度にだけ乗せて、内側に流れる濃淡を作る（輪郭は荒らさない）
+      float n3 = texture2D(uNoise, vec2(x * 0.5, yy * 0.42 - uTime * 0.85) + so * 1.7).r;
+      float T = clamp(smoothstep(-0.02, 0.55, e) * (1.05 - y * 0.6) * smoothstep(0.0, 0.25, y) * (0.72 + 0.56 * n3), 0.0, 1.0);
+      vec3 col = mix(vec3(0.45, 0.03, 0.0), vec3(1.0, 0.27, 0.02), smoothstep(0.0, 0.3, T));
+      col = mix(col, vec3(1.0, 0.62, 0.12), smoothstep(0.25, 0.6, T));
+      col = mix(col, vec3(1.0, 0.9, 0.6), smoothstep(0.6, 1.0, T));
+      float hdr = uBright * (0.45 + 1.6 * T * T);
+      gl_FragColor = vec4(col * hdr, v * uAlpha);
       #include <tonemapping_fragment>
       #include <encodings_fragment>
     }
   `;
+  const FLAME_SPAN = 2.2; // 板の半幅 ÷ 炎の基準の半幅。うねりや風で流れても板の端で切れない余白
+
+  // 炎用のノイズテクスチャ。継ぎ目なく繰り返す値ノイズの fBm を RGBA に 4 種類入れる。
+  // シェーダーで毎ピクセル計算する代わりに引くだけなので軽く、線形補間で縁もなめらかになる
+  function makeFlameNoise(THREE) {
+    const N = 256;
+    const data = new Uint8Array(N * N * 4);
+    const acc = new Float32Array(N * N);
+    for (let ch = 0; ch < 4; ch++) {
+      acc.fill(0);
+      let amp = 0.5;
+      for (let cells = 4; cells <= 32; cells *= 2) {
+        const lat = new Float32Array(cells * cells);
+        for (let i = 0; i < lat.length; i++) lat[i] = Math.random();
+        for (let py = 0; py < N; py++) {
+          const gy = (py / N) * cells;
+          const y0 = Math.floor(gy);
+          let fy = gy - y0;
+          fy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+          const r0 = (y0 % cells) * cells, r1 = ((y0 + 1) % cells) * cells;
+          for (let px = 0; px < N; px++) {
+            const gx = (px / N) * cells;
+            const x0 = Math.floor(gx);
+            let fx = gx - x0;
+            fx = fx * fx * fx * (fx * (fx * 6 - 15) + 10);
+            const c0 = x0 % cells, c1 = (x0 + 1) % cells;
+            const top = lat[r0 + c0] + (lat[r0 + c1] - lat[r0 + c0]) * fx;
+            const bot = lat[r1 + c0] + (lat[r1 + c1] - lat[r1 + c0]) * fx;
+            acc[py * N + px] += (top + (bot - top) * fy) * amp;
+          }
+        }
+        amp *= 0.5;
+      }
+      // 0〜1 いっぱいに引き伸ばす
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < acc.length; i++) { if (acc[i] < lo) lo = acc[i]; if (acc[i] > hi) hi = acc[i]; }
+      for (let i = 0; i < acc.length; i++) data[i * 4 + ch] = Math.round(((acc[i] - lo) / (hi - lo)) * 255);
+    }
+    const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.needsUpdate = true;
+    return tex;
+  }
   const EMBER_VERT = `
     attribute float aLife;
     attribute float aSize;
@@ -568,8 +622,9 @@
     if (opts.position) group.position.copy(opts.position);
     scene.add(group);
 
-    const geo = new THREE.PlaneGeometry(1, 1, 1, 8);
+    const geo = new THREE.PlaneGeometry(1, 1, 1, 1);
     geo.translate(0, 0.5, 0); // 根元を原点に
+    const noiseTex = makeFlameNoise(THREE);
     const uniformsList = [];
     const meshes = [];
     for (let i = 0; i < layers; i++) {
@@ -580,6 +635,8 @@
         uSeed: { value: seed + i * 7.3 },
         uAlpha: { value: (i === 0 ? 1.0 : 0.8) / Math.sqrt(layers) },
         uBright: { value: bright * (i === 0 ? 1.2 : 1) },
+        uSpan: { value: FLAME_SPAN },
+        uNoise: { value: noiseTex },
       };
       const mat = new THREE.ShaderMaterial({
         uniforms,
@@ -735,6 +792,7 @@
     }
 
     const flicker = { value: 1 };
+    const flickerNoise = makeFluctuation({ octaves: 7, baseFreq: 1 / 8 });
 
     // p = { power, wind, embers, smoke, pixelHeight }
     //   power は火の勢い（1 が基準）、wind は風、embers / smoke は粒の表示数、
@@ -743,8 +801,8 @@
       p = p || {};
       const power = p.power !== undefined ? p.power : 1;
       const wind = p.wind || 0;
-      // 炎の拍：周期の違う sin を重ねて不規則に見せる
-      flicker.value = 1 + Math.sin(t * 9.3) * 0.08 + Math.sin(t * 17.1 + 1.3) * 0.06 + Math.sin(t * 29.7 + 0.4) * 0.04;
+      // 炎の拍：1/f ゆらぎで、せわしなくも単調でもない明滅にする
+      flicker.value = 1 + flickerNoise.sample(t, 1.2) * 0.2;
       const h = height * Math.pow(power, 0.6) * (0.92 + flicker.value * 0.08);
       const w = width * Math.pow(power, 0.35);
       if (camera) group.rotation.y = Math.atan2(camera.position.x - group.position.x, camera.position.z - group.position.z);
@@ -754,7 +812,7 @@
         u.uWind.value = wind;
         u.uPower.value = power;
         const k = i === 0 ? 0.6 : 1 - (i - 1) * (0.35 / layers);
-        meshes[i].scale.set(w * k, h * (i === 0 ? 0.85 : 1 - (i - 1) * 0.06), 1);
+        meshes[i].scale.set(w * k * FLAME_SPAN, h * (i === 0 ? 0.85 : 1 - (i - 1) * 0.06), 1);
       }
       const scale = (p.pixelHeight || 600) * 0.5;
       if (embers) {

@@ -111,7 +111,7 @@ madobe.register({
 - `makeFluctuation({ octaves, baseFreq })` → `{ sample(t, beta) }`
   1/f ゆらぎ（ピンクノイズ）の時間関数。周波数が 2 倍ずつ違うなめらかな値ノイズを重ね、各オクターブの振幅を 2^(-k(β-1)/2) にしてパワースペクトルを 1/f^β にします。`sample(t, beta)` は概ね -1〜1。風の強さ・炎の明滅・光のちらつきなど「一定でも乱雑でもない」変化に使います
 - `makeFlame(THREE, scene, { layers, width, height, bright, position, camera, embers: { max }, smoke: { max, tint, opacity } })` → `{ group, flicker, update(dt, t, { power, wind, embers, smoke, pixelHeight }) }`
-  ゆらゆら揺れる炎。細長い板を `layers` 枚、少しずつ角度をずらして重ね、常にカメラの方へ向けます。形と色はフラグメントシェーダーで作ります：3D シンプレックスノイズを上向きに流し、ドメインワープで輪郭を巻き込ませ、温度に応じた黒体放射風の色（暗赤→橙→黄→白）を付けます（テクスチャ不要・加算合成・HDR）。`power` は火の勢い（1 が基準）、`wind` で先端がなびきます。`embers` で根元から舞い上がる火の粉、`smoke` で先端から立ちのぼる煙（`Points`）が付き、`update` で表示数を変えられます。`flicker.value`（約 0.8〜1.2）を光源の強さに掛けると、光が炎と同じ拍で明滅します
+  ゆらゆら揺れる炎。細長い板を `layers` 枚、少しずつ角度をずらして重ね、常にカメラの方へ向けます。形と色はフラグメントシェーダーで作ります：起動時に生成したノイズテクスチャ（継ぎ目なく繰り返す fBm）を上向きに流し、大きなうねりで全体をしならせ、輪郭をなだらかにぼかしつつ、温度に応じた黒体放射風の色（暗赤→橙→黄→白）を付けます（画像ファイル不要・加算合成・HDR）。`power` は火の勢い（1 が基準）、`wind` で先端がなびきます。`embers` で根元から舞い上がる火の粉、`smoke` で先端から立ちのぼる煙（`Points`）が付き、`update` で表示数を変えられます。`flicker.value`（約 0.8〜1.2、1/f ゆらぎ）を光源の強さに掛けると、光が炎と同じ拍で明滅します
 - `makePost(THREE, renderer, { bloom, threshold, vignette })` → `{ render(scene, camera, { time, haze, bloom, exposure }), dispose(), hdr }`
   ポストエフェクト。HDR のレンダーターゲット（WebGL2 なら半精度浮動小数・MSAA）にシーンを描き、1/4 解像度のブルーム（発光の滲み）と陽炎（`haze = { x, y, width, height, strength }` で指定した範囲の空気の歪み）を掛け、ACES トーンマッピングと sRGB 変換をして画面に出します。使うシーンは `create` で `renderer.toneMapping = THREE.NoToneMapping` にし（アプリ側が切替時に戻します）、`render` フックから `post.render` を呼び、`dispose` で `post.dispose()` を呼びます
 
